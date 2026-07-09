@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { db } from './firebase';
 import {
   Users,
   Phone,
@@ -239,6 +241,60 @@ export default function App() {
     localStorage.setItem('tags_pool_data_v2', JSON.stringify(tagsPool));
   }, [tagsPool]);
 
+  // --- Real-time Sync with Firestore ---
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'people'), (snapshot) => {
+      if (snapshot.empty) {
+        // Seed Firestore if empty
+        people.forEach((p) => {
+          setDoc(doc(db, 'people', p.id), p);
+        });
+      } else {
+        const list: Person[] = [];
+        snapshot.forEach((d) => {
+          list.push(d.data() as Person);
+        });
+        setPeople(list);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'customFields'), (snapshot) => {
+      if (snapshot.empty) {
+        customFields.forEach((cf) => {
+          setDoc(doc(db, 'customFields', cf.id), cf);
+        });
+      } else {
+        const list: CustomFieldDefinition[] = [];
+        snapshot.forEach((d) => {
+          list.push(d.data() as CustomFieldDefinition);
+        });
+        setCustomFields(list);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'tagsPool'), (snapshot) => {
+      if (snapshot.empty) {
+        tagsPool.forEach((tag) => {
+          setDoc(doc(db, 'tagsPool', tag), { name: tag });
+        });
+      } else {
+        const list: string[] = [];
+        snapshot.forEach((d) => {
+          list.push(d.id);
+        });
+        setTagsPool(list);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+
   // --- Filtering & Search States ---
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedAgeGroups, setSelectedAgeGroups] = useState<string[]>([]);
@@ -258,6 +314,39 @@ export default function App() {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldType, setNewFieldType] = useState<'text' | 'number' | 'date'>('text');
   const [isFieldManagerOpen, setIsFieldManagerOpen] = useState(false);
+
+  // --- Custom Alert/Confirm Dialog Modal States ---
+  const [modalConfig, setModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'alert' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'alert'
+  });
+
+  const customAlert = (message: string, title = '알림') => {
+    setModalConfig({
+      isOpen: true,
+      title,
+      message,
+      type: 'alert'
+    });
+  };
+
+  const customConfirm = (message: string, onConfirm: () => void, title = '확인') => {
+    setModalConfig({
+      isOpen: true,
+      title,
+      message,
+      type: 'confirm',
+      onConfirm
+    });
+  };
 
   // --- Form Input States (for Add/Edit Modal) ---
   const [formName, setFormName] = useState('');
@@ -330,7 +419,7 @@ export default function App() {
   const handleSavePerson = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) {
-      alert('이름을 입력해 주세요.');
+      customAlert('이름을 입력해 주세요.');
       return;
     }
 
@@ -338,34 +427,21 @@ export default function App() {
 
     if (editingPerson) {
       // Edit mode
-      setPeople(prev =>
-        prev.map(p =>
-          p.id === editingPerson.id
-            ? {
-                ...p,
-                name: formName.trim(),
-                phone: formPhone.trim(),
-                address: formAddress.trim(),
-                birthYear: formBirthYear,
-                ageGroup: calculatedGroup as any,
-                tags: formTags,
-                customFields: formCustomFields
-              }
-            : p
-        )
-      );
+      const updated: Person = {
+        ...editingPerson,
+        name: formName.trim(),
+        phone: formPhone.trim(),
+        address: formAddress.trim(),
+        birthYear: formBirthYear,
+        ageGroup: calculatedGroup as any,
+        tags: formTags,
+        customFields: formCustomFields
+      };
+      setDoc(doc(db, 'people', editingPerson.id), updated);
+      
       // Update details pane state immediately
       if (selectedPerson && selectedPerson.id === editingPerson.id) {
-        setSelectedPerson({
-          ...selectedPerson,
-          name: formName.trim(),
-          phone: formPhone.trim(),
-          address: formAddress.trim(),
-          birthYear: formBirthYear,
-          ageGroup: calculatedGroup as any,
-          tags: formTags,
-          customFields: formCustomFields
-        });
+        setSelectedPerson(updated);
       }
     } else {
       // Create mode
@@ -380,7 +456,7 @@ export default function App() {
         customFields: formCustomFields,
         createdAt: new Date().toISOString()
       };
-      setPeople(prev => [newPerson, ...prev]);
+      setDoc(doc(db, 'people', newPerson.id), newPerson);
       // Auto select the newly created person to display on the side panel
       setSelectedPerson(newPerson);
     }
@@ -391,12 +467,12 @@ export default function App() {
   // --- Delete Person ---
   const handleDeletePerson = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (window.confirm('정말로 이 인물 정보를 삭제하시겠습니까?')) {
-      setPeople(prev => prev.filter(p => p.id !== id));
+    customConfirm('정말로 이 인물 정보를 삭제하시겠습니까?', () => {
+      deleteDoc(doc(db, 'people', id));
       if (selectedPerson && selectedPerson.id === id) {
         setSelectedPerson(null);
       }
-    }
+    }, '인물 정보 삭제');
   };
 
   // --- Dynamic Tags Pool Creation ---
@@ -404,10 +480,10 @@ export default function App() {
     const cleanTag = newTagInput.trim();
     if (!cleanTag) return;
     if (tagsPool.includes(cleanTag)) {
-      alert('이미 존재하는 태그입니다.');
+      customAlert('이미 존재하는 태그입니다.');
       return;
     }
-    setTagsPool(prev => [...prev, cleanTag]);
+    setDoc(doc(db, 'tagsPool', cleanTag), { name: cleanTag });
     setFormTags(prev => [...prev, cleanTag]);
     setNewTagInput('');
   };
@@ -419,7 +495,7 @@ export default function App() {
     if (!cleanName) return;
 
     if (customFields.some(cf => cf.name.toLowerCase() === cleanName.toLowerCase())) {
-      alert('이미 동일한 이름의 사용자 정의 필드가 존재합니다.');
+      customAlert('이미 동일한 이름의 사용자 정의 필드가 존재합니다.');
       return;
     }
 
@@ -430,7 +506,7 @@ export default function App() {
       type: newFieldType
     };
 
-    setCustomFields(prev => [...prev, newField]);
+    setDoc(doc(db, 'customFields', fieldId), newField);
     setNewFieldName('');
     setFormCustomFields(prev => ({
       ...prev,
@@ -439,21 +515,25 @@ export default function App() {
   };
 
   const handleDeleteCustomField = (fieldId: string) => {
-    if (window.confirm('이 사용자 정의 필드를 정말로 삭제하시겠습니까? 해당 필드에 기록된 모든 정보도 함께 제거됩니다.')) {
-      setCustomFields(prev => prev.filter(cf => cf.id !== fieldId));
-      setPeople(prev =>
-        prev.map(p => {
-          const updatedCF = { ...p.customFields };
+    customConfirm(
+      '이 사용자 정의 필드를 정말로 삭제하시겠습니까? 해당 필드에 기록된 모든 정보도 함께 제거됩니다.',
+      () => {
+        deleteDoc(doc(db, 'customFields', fieldId));
+        people.forEach((p) => {
+          if (p.customFields && fieldId in p.customFields) {
+            const updatedCF = { ...p.customFields };
+            delete updatedCF[fieldId];
+            setDoc(doc(db, 'people', p.id), { ...p, customFields: updatedCF });
+          }
+        });
+        if (selectedPerson) {
+          const updatedCF = { ...selectedPerson.customFields };
           delete updatedCF[fieldId];
-          return { ...p, customFields: updatedCF };
-        })
-      );
-      if (selectedPerson) {
-        const updatedCF = { ...selectedPerson.customFields };
-        delete updatedCF[fieldId];
-        setSelectedPerson({ ...selectedPerson, customFields: updatedCF });
-      }
-    }
+          setSelectedPerson({ ...selectedPerson, customFields: updatedCF });
+        }
+      },
+      '사용자 정의 필드 삭제'
+    );
   };
 
   // --- Filter and Search Logic ---
@@ -574,6 +654,13 @@ export default function App() {
           <div>
             <h1 className="text-[17px] font-bold tracking-tight text-white flex items-center gap-2">
               Persona Archive <span className="text-[11px] bg-slate-700 text-slate-300 font-semibold px-2 py-0.5 rounded-full">v1.1</span>
+              <span className="inline-flex items-center gap-1 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+                <span>실시간 동기화 활성</span>
+              </span>
             </h1>
             <p className="text-[11px] text-slate-400 font-medium">사람 정보를 연령대, 성향 태그, 사용자 정의 필드로 기록하는 고밀도 저장소</p>
           </div>
@@ -1453,6 +1540,43 @@ export default function App() {
                 className="px-4 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition cursor-pointer"
               >
                 관리 완료 및 닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Alert/Confirm Modal Popup */}
+      {modalConfig.isOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-sm overflow-hidden transform transition-all">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+              <span className="font-bold text-slate-800 text-sm">
+                {modalConfig.title || '알림'}
+              </span>
+            </div>
+            <div className="px-5 py-4 text-slate-600 text-xs leading-relaxed whitespace-pre-line">
+              {modalConfig.message}
+            </div>
+            <div className="px-5 py-3 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+              {modalConfig.type === 'confirm' && (
+                <button
+                  onClick={() => setModalConfig(prev => ({ ...prev, isOpen: false }))}
+                  className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-md transition cursor-pointer"
+                >
+                  취소
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setModalConfig(prev => ({ ...prev, isOpen: false }));
+                  if (modalConfig.type === 'confirm' && modalConfig.onConfirm) {
+                    modalConfig.onConfirm();
+                  }
+                }}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-md transition cursor-pointer shadow-xs"
+              >
+                {modalConfig.type === 'confirm' ? '확인' : '닫기'}
               </button>
             </div>
           </div>
