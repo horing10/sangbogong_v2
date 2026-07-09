@@ -1,0 +1,6 @@
+{
+  "name": "사람 유형별 정보 저장소",
+  "description": "사람 정보를 연령대, 출생 연도, 맞춤형 성향 태그 및 사용자 정의 필드로 기록하고 깔끔하게 필터링 및 검색할 수 있는 개인 인맥 관리 사이트입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
